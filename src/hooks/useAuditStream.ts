@@ -45,73 +45,67 @@ export function useAuditStream() {
         const decoder = new TextDecoder();
         let buffer = '';
 
+        const processLine = (line: string) => {
+          if (!line.trim()) return;
+          let msg: { type: string; [key: string]: unknown };
+          try { msg = JSON.parse(line); } catch { return; }
+
+          if (msg.type === 'error') throw new Error(String(msg.message));
+
+          switch (msg.type) {
+            case 'status':
+              setStatusMessage(String(msg.message));
+              break;
+            case 'progress': {
+              const phase = msg.phase as number;
+              const chars = msg.chars as number;
+              if (phase === 1) setProgress(Math.min(45, (chars / 2500) * 45));
+              else setProgress(55 + Math.min(35, (chars / 3000) * 35));
+              break;
+            }
+            case 'section':
+              setSections((prev) => [...prev, msg.data as AuditSection]);
+              setProgress((prev) => Math.min(50, prev + 1));
+              break;
+            case 'summary':
+              setSummary(msg.data as Omit<AuditResult, 'sections'>);
+              setProgress(55);
+              setStatus('rewriting');
+              break;
+            case 'rewrite': {
+              const rw = msg.data as { id: string; before: string; after: string };
+              setSections((prev) =>
+                prev.map((s) => s.id === (rw.id as SectionId) ? { ...s, before: rw.before, after: rw.after } : s)
+              );
+              setProgress((prev) => Math.min(95, prev + 6));
+              break;
+            }
+            case 'done':
+              setProgress(100);
+              setStatus('done');
+              break;
+          }
+        };
+
         while (true) {
           const { done, value } = await reader.read();
-          if (done) break;
+
+          if (done) {
+            // flush any remaining buffered line
+            if (buffer.trim()) processLine(buffer);
+            break;
+          }
 
           buffer += decoder.decode(value, { stream: true });
           const lines = buffer.split('\n');
           buffer = lines.pop() ?? '';
 
-          for (const line of lines) {
-            if (!line.trim()) continue;
-
-            let msg: { type: string; [key: string]: unknown };
-            try {
-              msg = JSON.parse(line);
-            } catch {
-              continue;
-            }
-
-            if (msg.type === 'error') throw new Error(String(msg.message));
-
-            switch (msg.type) {
-              case 'status':
-                setStatusMessage(String(msg.message));
-                break;
-
-              case 'progress': {
-                const phase = msg.phase as number;
-                const chars = msg.chars as number;
-                if (phase === 1) {
-                  // Phase 1: scores, ~2000 chars max → maps to 0–45%
-                  setProgress(Math.min(45, (chars / 2500) * 45));
-                } else {
-                  // Phase 2: rewrites, ~3000 chars max → maps to 55–90%
-                  setProgress(55 + Math.min(35, (chars / 3000) * 35));
-                }
-                break;
-              }
-
-              case 'section':
-                setSections((prev) => [...prev, msg.data as AuditSection]);
-                setProgress((prev) => Math.min(50, prev + 1));
-                break;
-
-              case 'summary':
-                setSummary(msg.data as Omit<AuditResult, 'sections'>);
-                setProgress(55);
-                setStatus('rewriting');
-                break;
-
-              case 'rewrite': {
-                const rw = msg.data as { id: string; before: string; after: string };
-                setSections((prev) =>
-                  prev.map((s) =>
-                    s.id === (rw.id as SectionId) ? { ...s, before: rw.before, after: rw.after } : s
-                  )
-                );
-                setProgress((prev) => Math.min(95, prev + 6));
-                break;
-              }
-
-              case 'done':
-                setProgress(100);
-                setStatus('done');
-                break;
-            }
-          }
+          for (const line of lines) processLine(line);
         }
+
+        // Fallback: if stream closed without a 'done' message, mark done anyway
+        setStatus((s) => (s === 'rewriting' || s === 'scoring' ? 'done' : s));
+        setProgress(100);
       } catch (err) {
         setError(String(err));
         setStatus('error');
