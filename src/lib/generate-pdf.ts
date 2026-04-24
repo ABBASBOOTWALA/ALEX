@@ -1,318 +1,397 @@
 import type { AuditResult } from '@/types/audit';
 import { gradeColor, scoreColor } from './score-utils';
 
-// jsPDF color helper: hex "#22c55e" → [r, g, b]
 function hexToRgb(hex: string): [number, number, number] {
-  const r = parseInt(hex.slice(1, 3), 16);
-  const g = parseInt(hex.slice(3, 5), 16);
-  const b = parseInt(hex.slice(5, 7), 16);
-  return [r, g, b];
+  return [
+    parseInt(hex.slice(1, 3), 16),
+    parseInt(hex.slice(3, 5), 16),
+    parseInt(hex.slice(5, 7), 16),
+  ];
 }
 
-function scoreLabel(score: number): string {
-  if (score >= 80) return '● Strong';
-  if (score >= 60) return '◐ Decent';
-  if (score >= 40) return '○ Weak';
-  return '✕ Critical';
+// Line height in mm for a given font size in pt
+function lh(pt: number, ratio = 1.55): number {
+  return (pt * 25.4) / 72 * ratio;
 }
 
 export async function generateAuditPDF(result: AuditResult, targetRole?: string): Promise<void> {
   const { jsPDF } = await import('jspdf');
+
+  const W = 210;
+  const H = 297;
+  const ML = 20;   // left margin
+  const MR = 20;   // right margin
+  const CW = W - ML - MR;  // content width
+  const BOTTOM = H - 16;   // footer boundary
+
   const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
 
-  const W = 210;   // A4 width mm
-  const MARGIN = 18;
-  const CONTENT_W = W - MARGIN * 2;
   let y = 0;
+  let pageNum = 1;
 
+  // ── cursor helpers ────────────────────────────────────────────
+  const addPage = () => {
+    doc.addPage();
+    pageNum++;
+    y = 24;
+    // subtle top rule
+    doc.setDrawColor(230, 230, 232);
+    doc.setLineWidth(0.2);
+    doc.line(ML, 14, W - MR, 14);
+    // page label
+    doc.setFontSize(7.5);
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(180, 180, 185);
+    doc.text('ALEX — LinkedIn Profile Audit', ML, 11);
+    doc.text(`Page ${pageNum}`, W - MR, 11, { align: 'right' });
+  };
+
+  // Ensure at least `need` mm remain before BOTTOM; if not, add page
+  const need = (mm: number) => { if (y + mm > BOTTOM) addPage(); };
+
+  // Wrap text and return lines (also sets font size on doc)
+  const wrap = (text: string, width: number, size: number): string[] => {
+    doc.setFontSize(size);
+    return doc.splitTextToSize(text || '', width);
+  };
+
+  // Draw a filled pill/tag
+  const pill = (
+    px: number, py: number, label: string,
+    bg: [number, number, number], fg: [number, number, number],
+    size = 7
+  ) => {
+    doc.setFontSize(size);
+    const tw = doc.getTextWidth(label);
+    const pw = tw + 4; const ph = lh(size) + 1.5;
+    doc.setFillColor(...bg);
+    doc.roundedRect(px, py - ph + 1, pw, ph, 1, 1, 'F');
+    doc.setTextColor(...fg);
+    doc.text(label, px + 2, py);
+  };
+
+  // Draw progress bar
+  const bar = (bx: number, by: number, score: number, w = 70, h = 3) => {
+    doc.setFillColor(230, 230, 232);
+    doc.roundedRect(bx, by, w, h, 1, 1, 'F');
+    if (score > 0) {
+      doc.setFillColor(...hexToRgb(scoreColor(score)));
+      doc.roundedRect(bx, by, Math.max(2, (score / 100) * w), h, 1, 1, 'F');
+    }
+  };
+
+  // Draw a labeled text block with a colored left border
+  const textBlock = (
+    label: string, content: string,
+    borderHex: string, bgHex: string, textHex: string
+  ) => {
+    const lines = wrap(content || 'Not provided', CW - 10, 8.5);
+    const blockH = lines.length * lh(8.5) + 8;
+    need(blockH + 10);
+    // label
+    doc.setFontSize(7.5);
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(...hexToRgb(borderHex));
+    doc.text(label, ML, y);
+    y += 4;
+    // bg fill
+    const [br, bg2, bb] = hexToRgb(bgHex);
+    doc.setFillColor(br, bg2, bb);
+    doc.roundedRect(ML, y, CW, blockH - 2, 2, 2, 'F');
+    // left accent border
+    doc.setFillColor(...hexToRgb(borderHex));
+    doc.rect(ML, y, 2.5, blockH - 2, 'F');
+    // text
+    doc.setFontSize(8.5);
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(...hexToRgb(textHex));
+    doc.text(lines, ML + 6, y + 5);
+    y += blockH + 4;
+  };
+
+  // ── PAGE 1: Cover ─────────────────────────────────────────────
+  y = 0;
   const gradeRgb = hexToRgb(gradeColor(result.grade));
 
-  // ─── helpers ────────────────────────────────────────────────
-  const newPage = () => {
-    doc.addPage();
-    y = MARGIN;
-  };
+  // Dark header
+  doc.setFillColor(14, 14, 18);
+  doc.rect(0, 0, W, 64, 'F');
 
-  const checkPage = (needed: number) => {
-    if (y + needed > 275) newPage();
-  };
+  // Thin accent line at bottom of header
+  doc.setFillColor(...gradeRgb);
+  doc.rect(0, 63, W, 1, 'F');
 
-  const setColor = (hex: string) => {
-    const [r, g, b] = hexToRgb(hex);
-    doc.setTextColor(r, g, b);
-  };
+  // ALEX label
+  doc.setFontSize(7.5);
+  doc.setFont('helvetica', 'normal');
+  doc.setTextColor(90, 90, 100);
+  doc.text('ALEX  /  ARTIFICIAL LINKEDIN EXAMINER', ML, 12);
 
-  const resetColor = () => doc.setTextColor(30, 30, 30);
-
-  const drawBar = (x: number, barY: number, score: number, width = 60, height = 3) => {
-    // background
-    doc.setFillColor(220, 220, 220);
-    doc.roundedRect(x, barY, width, height, 1, 1, 'F');
-    // fill
-    const [r, g, b] = hexToRgb(scoreColor(score));
-    doc.setFillColor(r, g, b);
-    doc.roundedRect(x, barY, (score / 100) * width, height, 1, 1, 'F');
-  };
-
-  const wrapText = (text: string, maxWidth: number, fontSize: number): string[] => {
-    doc.setFontSize(fontSize);
-    return doc.splitTextToSize(text, maxWidth);
-  };
-
-  // ─── PAGE 1 — Cover ─────────────────────────────────────────
-  y = MARGIN;
-
-  // Header band
-  doc.setFillColor(15, 15, 20);
-  doc.rect(0, 0, W, 52, 'F');
-
-  // ALEX brand
-  doc.setFontSize(9);
-  doc.setTextColor(120, 120, 130);
-  doc.text('AUDITED BY ALEX™ — ARTIFICIAL LINKEDIN EXAMINER', MARGIN, 12);
+  // Date top right
+  doc.setTextColor(70, 70, 80);
+  const dateStr = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+  doc.text(dateStr, W - MR, 12, { align: 'right' });
 
   // Grade letter
-  doc.setFontSize(64);
+  doc.setFontSize(72);
   doc.setFont('helvetica', 'bold');
   doc.setTextColor(...gradeRgb);
-  doc.text(result.grade, MARGIN, 44);
+  doc.text(result.grade, ML, 52);
 
-  // Score + label
-  doc.setFontSize(28);
-  doc.setTextColor(240, 240, 240);
-  doc.text(`${Math.round(result.overall_score)}/100`, MARGIN + 26, 34);
+  // Score
+  doc.setFontSize(32);
+  doc.setTextColor(240, 240, 242);
+  doc.text(`${Math.round(result.overall_score)}`, ML + 28, 46);
+  doc.setFontSize(14);
+  doc.setTextColor(100, 100, 110);
+  doc.text('/100', ML + 28 + doc.getTextWidth(`${Math.round(result.overall_score)}`) + 1, 46);
 
-  doc.setFontSize(11);
+  // Grade label
+  doc.setFontSize(10);
+  doc.setFont('helvetica', 'normal');
   doc.setTextColor(...gradeRgb);
-  doc.text(result.grade_label, MARGIN + 26, 43);
+  doc.text(result.grade_label, ML + 28, 54);
 
-  doc.setFontSize(9);
-  doc.setTextColor(150, 150, 160);
-  doc.text(`Beats ${result.percentile}% of LinkedIn profiles`, MARGIN + 26, 50);
+  // Percentile pill
+  doc.setFontSize(8);
+  doc.setTextColor(130, 130, 140);
+  doc.text(`Beats ${result.percentile}% of LinkedIn profiles`, ML + 28, 61);
 
   // Target role
   if (targetRole) {
-    doc.setFontSize(9);
-    doc.setTextColor(150, 150, 160);
-    doc.text(`Target role: ${targetRole}`, W - MARGIN, 12, { align: 'right' });
+    doc.setFontSize(8.5);
+    doc.setTextColor(100, 100, 110);
+    const roleLines = wrap(`Target role: ${targetRole}`, 80, 8.5);
+    doc.text(roleLines, W - MR, 44, { align: 'right' });
   }
 
-  y = 64;
+  y = 76;
 
   // ALEX verdict
-  doc.setFontSize(10);
+  const verdictLines = wrap(`"${result.alex_verdict}"`, CW, 9.5);
+  need(verdictLines.length * lh(9.5) + 8);
+  doc.setFontSize(9.5);
   doc.setFont('helvetica', 'italic');
-  setColor('#a1a1aa');
-  const verdictLines = wrapText(`"${result.alex_verdict}"`, CONTENT_W, 10);
-  doc.text(verdictLines, MARGIN, y);
-  y += verdictLines.length * 5 + 4;
+  doc.setTextColor(80, 80, 90);
+  doc.text(verdictLines, ML, y);
+  y += verdictLines.length * lh(9.5) + 3;
 
+  // Role fit
+  const fitLines = wrap(result.target_role_fit, CW, 8.5);
+  doc.setFontSize(8.5);
   doc.setFont('helvetica', 'normal');
+  doc.setTextColor(130, 130, 140);
+  doc.text(fitLines, ML, y);
+  y += fitLines.length * lh(8.5) + 12;
 
-  // Target role fit
-  resetColor();
-  doc.setFontSize(9);
-  doc.setTextColor(100, 100, 110);
-  const fitLines = wrapText(`Role fit: ${result.target_role_fit}`, CONTENT_W, 9);
-  doc.text(fitLines, MARGIN, y);
-  y += fitLines.length * 4.5 + 10;
+  // ── Section scores table ──────────────────────────────────────
+  need(12 + result.sections.length * 11);
 
-  // Divider
-  doc.setDrawColor(220, 220, 220);
-  doc.line(MARGIN, y, W - MARGIN, y);
-  y += 8;
-
-  // ─── Score summary table ─────────────────────────────────────
-  doc.setFontSize(11);
+  // Table header
+  doc.setFontSize(8);
   doc.setFont('helvetica', 'bold');
-  resetColor();
-  doc.text('Section Scores', MARGIN, y);
-  y += 7;
+  doc.setTextColor(140, 140, 150);
+  doc.text('SECTION', ML, y);
+  doc.text('SCORE', W - MR, y, { align: 'right' });
+  y += 3;
+  doc.setDrawColor(220, 220, 224);
+  doc.setLineWidth(0.3);
+  doc.line(ML, y, W - MR, y);
+  y += 5;
 
   for (const s of result.sections) {
-    checkPage(12);
+    need(11);
     const scoreRgb = hexToRgb(scoreColor(s.score));
 
+    // Row bg on alternating rows (subtle)
     doc.setFontSize(9);
     doc.setFont('helvetica', 'normal');
-    resetColor();
-    doc.text(s.label, MARGIN, y);
+    doc.setTextColor(40, 40, 45);
+    doc.text(s.label, ML, y);
 
-    drawBar(MARGIN + 38, y - 3, s.score, 80, 4);
+    // Weight badge
+    doc.setFontSize(7);
+    doc.setTextColor(160, 160, 170);
+    doc.text(`${s.weight}%`, ML + 36, y);
 
+    // Progress bar
+    bar(ML + 46, y - 3.5, s.score, 80, 3.5);
+
+    // Score number
+    doc.setFontSize(9);
     doc.setFont('helvetica', 'bold');
     doc.setTextColor(...scoreRgb);
-    doc.text(String(s.score), MARGIN + 124, y);
+    doc.text(String(s.score), W - MR, y, { align: 'right' });
 
-    doc.setFont('helvetica', 'normal');
-    doc.setTextColor(140, 140, 150);
-    doc.setFontSize(8);
-    doc.text(scoreLabel(s.score), MARGIN + 134, y);
-
-    y += 8;
+    y += 9;
+    doc.setDrawColor(240, 240, 242);
+    doc.setLineWidth(0.1);
+    doc.line(ML, y - 2.5, W - MR, y - 2.5);
   }
 
-  // ─── Action Plan ─────────────────────────────────────────────
-  y += 4;
-  doc.setDrawColor(220, 220, 220);
-  doc.line(MARGIN, y, W - MARGIN, y);
   y += 8;
 
-  doc.setFontSize(11);
-  doc.setFont('helvetica', 'bold');
-  resetColor();
-  doc.text('Action Plan', MARGIN, y);
-  y += 7;
+  // ── Action plan ───────────────────────────────────────────────
+  need(14 + result.action_plan.length * 14);
 
-  const impactColor: Record<string, string> = {
-    High: '#ef4444',
-    Medium: '#f97316',
-    Low: '#22c55e',
+  doc.setFontSize(8);
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(140, 140, 150);
+  doc.text('ACTION PLAN', ML, y);
+  y += 3;
+  doc.setDrawColor(220, 220, 224);
+  doc.setLineWidth(0.3);
+  doc.line(ML, y, W - MR, y);
+  y += 6;
+
+  const impactBg: Record<string, [number, number, number]> = {
+    High:   [254, 226, 226],
+    Medium: [255, 237, 213],
+    Low:    [220, 252, 231],
+  };
+  const impactFg: Record<string, [number, number, number]> = {
+    High:   [185, 28, 28],
+    Medium: [194, 65, 12],
+    Low:    [22, 101, 52],
   };
 
   for (const item of result.action_plan) {
-    checkPage(12);
-    doc.setFontSize(9);
-    doc.setFont('helvetica', 'bold');
-    resetColor();
-    doc.text(`${item.rank}.`, MARGIN, y);
+    const actionLines = wrap(item.action, CW - 40, 9);
+    const rowH = Math.max(12, actionLines.length * lh(9) + 6);
+    need(rowH + 2);
 
-    const actionLines = wrapText(item.action, CONTENT_W - 20, 9);
-    doc.setFont('helvetica', 'normal');
-    doc.text(actionLines, MARGIN + 7, y);
-
-    const tagX = W - MARGIN;
+    // Rank circle
+    doc.setFillColor(235, 235, 240);
+    doc.circle(ML + 3.5, y - 1.5, 3.5, 'F');
     doc.setFontSize(7.5);
-    setColor(impactColor[item.impact] ?? '#888');
-    doc.text(`${item.impact} impact`, tagX, y, { align: 'right' });
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(80, 80, 90);
+    doc.text(String(item.rank), ML + 3.5, y + 0.5, { align: 'center' });
 
-    y += actionLines.length * 4.5 + 2;
+    // Action text
+    doc.setFontSize(9);
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(40, 40, 45);
+    doc.text(actionLines, ML + 10, y);
 
-    doc.setTextColor(140, 140, 150);
-    doc.text(item.effort, MARGIN + 7, y);
-    y += 5;
+    // Impact pill
+    const ibg = impactBg[item.impact] ?? [235, 235, 240];
+    const ifg = impactFg[item.impact] ?? [80, 80, 90];
+    pill(W - MR - 28, y, item.impact, ibg, ifg, 7);
+
+    y += rowH;
+
+    // Effort label
+    doc.setFontSize(7.5);
+    doc.setTextColor(160, 160, 170);
+    doc.text(item.effort, ML + 10, y - 3);
   }
 
-  // ─── PAGES 2+ — Section Details ──────────────────────────────
+  // ── Pages 2+: Section details ─────────────────────────────────
   for (const section of result.sections) {
-    newPage();
+    addPage();
 
     const sRgb = hexToRgb(scoreColor(section.score));
 
-    // Section header
-    doc.setFillColor(15, 15, 20);
-    doc.rect(0, 0, W, 22, 'F');
+    // Section header bar
+    doc.setFillColor(14, 14, 18);
+    doc.rect(ML - 20, 14, W, 22, 'F');
 
+    // Score accent line (colored by score)
+    doc.setFillColor(...sRgb);
+    doc.rect(ML - 20, 35.5, W, 0.8, 'F');
+
+    // Section label
     doc.setFontSize(13);
     doc.setFont('helvetica', 'bold');
-    doc.setTextColor(240, 240, 240);
-    doc.text(section.label, MARGIN, 14);
+    doc.setTextColor(235, 235, 238);
+    doc.text(section.label, ML, 29);
 
-    doc.setFontSize(18);
+    // Score
+    doc.setFontSize(22);
     doc.setTextColor(...sRgb);
-    doc.text(String(section.score), W - MARGIN, 14, { align: 'right' });
+    doc.text(String(section.score), W - MR, 29, { align: 'right' });
 
+    // Weight + /100
     doc.setFontSize(8);
-    doc.setTextColor(120, 120, 130);
-    doc.text(`Weight: ${section.weight}%  ·  ${scoreLabel(section.score)}`, W - MARGIN, 20, { align: 'right' });
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(90, 90, 100);
+    doc.text(`Weight ${section.weight}%  /100`, W - MR, 35, { align: 'right' });
 
-    y = 32;
+    y = 46;
+
+    // Score bar (full width, thin)
+    bar(ML, y, section.score, CW, 4);
+    y += 10;
 
     // Critique
-    doc.setFontSize(9);
+    const critLines = wrap(section.critique, CW, 9.5);
+    need(critLines.length * lh(9.5) + 8);
+    doc.setFontSize(9.5);
     doc.setFont('helvetica', 'italic');
-    setColor('#525252');
-    const critLines = wrapText(section.critique, CONTENT_W, 9);
-    doc.text(critLines, MARGIN, y);
-    y += critLines.length * 4.5 + 6;
+    doc.setTextColor(60, 60, 68);
+    doc.text(critLines, ML, y);
+    y += critLines.length * lh(9.5) + 8;
 
     // Issues
     if (section.issues.length > 0) {
+      need(8 + section.issues.length * 10);
+      doc.setFontSize(7.5);
       doc.setFont('helvetica', 'bold');
-      doc.setFontSize(8.5);
-      setColor('#ef4444');
-      doc.text('Issues', MARGIN, y);
+      doc.setTextColor(185, 28, 28);
+      doc.text('ISSUES', ML, y);
       y += 5;
-      doc.setFont('helvetica', 'normal');
+
       for (const issue of section.issues) {
-        checkPage(8);
-        const iLines = wrapText(`• ${issue}`, CONTENT_W - 4, 8.5);
-        doc.text(iLines, MARGIN + 2, y);
-        y += iLines.length * 4.2 + 1.5;
+        const iLines = wrap(`- ${issue}`, CW - 6, 8.5);
+        need(iLines.length * lh(8.5) + 3);
+        doc.setFontSize(8.5);
+        doc.setFont('helvetica', 'normal');
+        doc.setTextColor(80, 30, 30);
+        doc.text(iLines, ML + 4, y);
+        y += iLines.length * lh(8.5) + 2;
       }
-      y += 2;
+      y += 4;
     }
 
     // Strengths
     if (section.strengths.length > 0) {
+      need(8 + section.strengths.length * 10);
+      doc.setFontSize(7.5);
       doc.setFont('helvetica', 'bold');
-      doc.setFontSize(8.5);
-      setColor('#22c55e');
-      doc.text('Strengths', MARGIN, y);
+      doc.setTextColor(22, 101, 52);
+      doc.text('STRENGTHS', ML, y);
       y += 5;
-      doc.setFont('helvetica', 'normal');
-      for (const s of section.strengths) {
-        checkPage(8);
-        const sLines = wrapText(`✓ ${s}`, CONTENT_W - 4, 8.5);
-        doc.text(sLines, MARGIN + 2, y);
-        y += sLines.length * 4.2 + 1.5;
+
+      for (const strength of section.strengths) {
+        const sLines = wrap(`+ ${strength}`, CW - 6, 8.5);
+        need(sLines.length * lh(8.5) + 3);
+        doc.setFontSize(8.5);
+        doc.setFont('helvetica', 'normal');
+        doc.setTextColor(20, 70, 35);
+        doc.text(sLines, ML + 4, y);
+        y += sLines.length * lh(8.5) + 2;
       }
-      y += 2;
+      y += 6;
     }
 
-    // Divider
-    doc.setDrawColor(220, 220, 220);
-    doc.line(MARGIN, y, W - MARGIN, y);
-    y += 6;
+    // BEFORE block
+    textBlock('BEFORE', section.before ?? 'Not provided', '#71717a', '#f7f7f8', '#444450');
 
-    // BEFORE
-    doc.setFontSize(9);
-    doc.setFont('helvetica', 'bold');
-    doc.setTextColor(100, 100, 110);
-    doc.text('BEFORE', MARGIN, y);
-    y += 5;
-
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(8.5);
-    doc.setTextColor(130, 130, 140);
-    const beforeText = section.before || 'Not provided';
-    const beforeLines = wrapText(beforeText, CONTENT_W, 8.5);
-    // Light gray background
-    doc.setFillColor(245, 245, 247);
-    doc.roundedRect(MARGIN - 1, y - 3, CONTENT_W + 2, beforeLines.length * 4.5 + 4, 1, 1, 'F');
-    doc.text(beforeLines, MARGIN + 1, y);
-    y += beforeLines.length * 4.5 + 8;
-
-    checkPage(20);
-
-    // AFTER
-    doc.setFontSize(9);
-    doc.setFont('helvetica', 'bold');
-    setColor('#16a34a');
-    doc.text('AFTER  (copy-paste ready)', MARGIN, y);
-    y += 5;
-
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(8.5);
-    doc.setTextColor(30, 80, 40);
-    const afterLines = wrapText(section.after ?? 'No rewrite available.', CONTENT_W, 8.5);
-    // Light green background
-    doc.setFillColor(240, 253, 244);
-    const afterH = afterLines.length * 4.5 + 6;
-    checkPage(afterH + 4);
-    doc.roundedRect(MARGIN - 1, y - 3, CONTENT_W + 2, afterH, 1, 1, 'F');
-    doc.text(afterLines, MARGIN + 1, y);
-    y += afterH + 4;
+    // AFTER block
+    textBlock('AFTER  —  copy-paste ready', section.after ?? 'Rewrite not available.', '#16a34a', '#f0fdf4', '#14532d');
   }
 
-  // ─── Footer on every page ─────────────────────────────────────
-  const totalPages = (doc as unknown as { internal: { getNumberOfPages: () => number } }).internal.getNumberOfPages();
-  for (let i = 1; i <= totalPages; i++) {
-    doc.setPage(i);
-    doc.setFontSize(7.5);
-    doc.setTextColor(180, 180, 190);
-    doc.text(`ALEX™ LinkedIn Audit  ·  Page ${i} of ${totalPages}`, W / 2, 292, { align: 'center' });
-  }
+  // ── Footer: page 1 ───────────────────────────────────────────
+  doc.setPage(1);
+  doc.setFontSize(7.5);
+  doc.setFont('helvetica', 'normal');
+  doc.setTextColor(180, 180, 185);
+  doc.setDrawColor(220, 220, 224);
+  doc.setLineWidth(0.2);
+  doc.line(ML, H - 12, W - MR, H - 12);
+  doc.text('ALEX — Artificial LinkedIn Examiner', ML, H - 7);
+  doc.text('Page 1', W - MR, H - 7, { align: 'right' });
 
   doc.save('linkedin-audit-by-alex.pdf');
 }

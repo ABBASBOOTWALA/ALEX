@@ -23,7 +23,7 @@ export function SectionAudit({ section, index, isRewriting }: SectionAuditProps)
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.4, delay: index * 0.08 }}
     >
-      <Card className="bg-zinc-900 border-zinc-800 overflow-hidden">
+      <Card className="bg-zinc-900 border-zinc-800 overflow-hidden !p-0 !gap-0">
         <div
           className="flex items-center gap-4 p-5 cursor-pointer select-none"
           onClick={() => setExpanded((v) => !v)}
