@@ -1,4 +1,5 @@
 import type { AuditResult } from '@/types/audit';
+import type { InterviewKit } from '@/types/interview';
 import { gradeColor, scoreColor } from './score-utils';
 
 function hexToRgb(hex: string): [number, number, number] {
@@ -14,7 +15,7 @@ function lh(pt: number, ratio = 1.55): number {
   return (pt * 25.4) / 72 * ratio;
 }
 
-export async function generateAuditPDF(result: AuditResult, targetRole?: string): Promise<void> {
+export async function generateAuditPDF(result: AuditResult, interviewKit?: InterviewKit, targetRole?: string): Promise<void> {
   const { jsPDF } = await import('jspdf');
 
   const W = 210;
@@ -380,6 +381,109 @@ export async function generateAuditPDF(result: AuditResult, targetRole?: string)
 
     // AFTER block
     textBlock('AFTER  —  copy-paste ready', section.after ?? 'Rewrite not available.', '#16a34a', '#f0fdf4', '#14532d');
+  }
+
+  // ── Interview Kit Pages ───────────────────────────────────────
+  if (interviewKit) {
+    addPage();
+    doc.setFillColor(14, 14, 18);
+    doc.rect(ML - 20, 14, W, 22, 'F');
+    doc.setFillColor(59, 130, 246);
+    doc.rect(ML - 20, 35.5, W, 0.8, 'F');
+    doc.setFontSize(13);
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(235, 235, 238);
+    doc.text('Interview Prep Kit', ML, 29);
+    doc.setFontSize(8);
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(90, 90, 100);
+    doc.text(`${interviewKit.extracted.seniority} ${interviewKit.extracted.domain}  ·  ${interviewKit.extracted.roleType}`, W - MR, 29, { align: 'right' });
+    y = 46;
+
+    if (interviewKit.extracted.skills.length > 0) {
+      doc.setFontSize(7.5); doc.setFont('helvetica', 'bold'); doc.setTextColor(140, 140, 150);
+      doc.text('KEY SKILLS', ML, y); y += 5;
+      const skillLines = wrap(interviewKit.extracted.skills.join('  ·  '), CW, 8.5);
+      doc.setFontSize(8.5); doc.setFont('helvetica', 'normal'); doc.setTextColor(200, 200, 210);
+      doc.text(skillLines, ML, y); y += skillLines.length * lh(8.5) + 8;
+    }
+
+    if (interviewKit.mustKnow.length > 0) {
+      need(12 + interviewKit.mustKnow.length * 8);
+      doc.setFontSize(7.5); doc.setFont('helvetica', 'bold'); doc.setTextColor(217, 119, 6);
+      doc.text('MUST KNOW', ML, y); y += 5;
+      for (const item of interviewKit.mustKnow) {
+        const iLines = wrap(`- ${item.topic}: ${item.why}`, CW, 8.5);
+        need(iLines.length * lh(8.5) + 3);
+        doc.setFontSize(8.5); doc.setFont('helvetica', 'normal'); doc.setTextColor(60, 60, 68);
+        doc.text(iLines, ML + 3, y); y += iLines.length * lh(8.5) + 2;
+      }
+      y += 6;
+    }
+
+    if (interviewKit.revisionPlan.length > 0) {
+      need(14 + interviewKit.revisionPlan.length * 16);
+      doc.setFontSize(7.5); doc.setFont('helvetica', 'bold'); doc.setTextColor(140, 140, 150);
+      doc.text('30-MINUTE REVISION PLAN', ML, y); y += 5;
+      for (const slot of interviewKit.revisionPlan) {
+        need(14);
+        doc.setFontSize(8); doc.setFont('helvetica', 'bold');
+        doc.setTextColor(59, 130, 246); doc.text(slot.slot, ML, y);
+        doc.setTextColor(40, 40, 45); doc.text(slot.title, ML + 22, y); y += 4;
+        doc.setFont('helvetica', 'normal'); doc.setFontSize(7.5); doc.setTextColor(120, 120, 130);
+        doc.text(slot.topics.join('  ·  '), ML + 4, y); y += 7;
+      }
+    }
+
+    const qSections: { label: string; questions: typeof interviewKit.technical }[] = [
+      { label: 'Technical Questions', questions: interviewKit.technical },
+      { label: 'Behavioral Questions', questions: interviewKit.behavioral },
+      { label: 'Coding Questions', questions: interviewKit.coding },
+      { label: 'System Design Questions', questions: interviewKit.systemDesign },
+    ].filter((s) => s.questions.length > 0);
+
+    for (const qs of qSections) {
+      addPage();
+      doc.setFillColor(14, 14, 18); doc.rect(ML - 20, 14, W, 22, 'F');
+      doc.setFillColor(59, 130, 246); doc.rect(ML - 20, 35.5, W, 0.8, 'F');
+      doc.setFontSize(13); doc.setFont('helvetica', 'bold'); doc.setTextColor(235, 235, 238);
+      doc.text(qs.label, ML, 29);
+      doc.setFontSize(8); doc.setFont('helvetica', 'normal'); doc.setTextColor(90, 90, 100);
+      doc.text(`${qs.questions.length} questions`, W - MR, 29, { align: 'right' });
+      y = 46;
+
+      for (let qi = 0; qi < qs.questions.length; qi++) {
+        const q = qs.questions[qi];
+        const qLines = wrap(`${qi + 1}. ${q.q}`, CW, 9);
+        const answerLines = q.sampleAnswer ? wrap(q.sampleAnswer, CW - 6, 8) : [];
+        need(qLines.length * lh(9) + answerLines.length * lh(8) + 24);
+        doc.setFontSize(9); doc.setFont('helvetica', 'bold'); doc.setTextColor(40, 40, 45);
+        doc.text(qLines, ML, y); y += qLines.length * lh(9) + 3;
+        const diffColors: Record<string, [number, number, number]> = {
+          easy: [22, 101, 52], medium: [146, 64, 14], hard: [185, 28, 28],
+        };
+        doc.setFontSize(7); doc.setFont('helvetica', 'normal');
+        doc.setTextColor(...(diffColors[q.difficulty] ?? [100, 100, 110]));
+        doc.text(q.difficulty.toUpperCase(), ML, y);
+        if (q.topic) { doc.setTextColor(120, 120, 130); doc.text(`  ${q.topic}`, ML + doc.getTextWidth(q.difficulty.toUpperCase()) + 2, y); }
+        y += 5;
+        if (q.framework) {
+          const fLines = wrap(`Framework: ${q.framework}`, CW - 6, 8);
+          doc.setFontSize(8); doc.setTextColor(100, 100, 110);
+          doc.text(fLines, ML + 3, y); y += fLines.length * lh(8) + 3;
+        }
+        if (answerLines.length > 0) {
+          const blockH = answerLines.length * lh(8) + 6;
+          need(blockH + 4);
+          doc.setFillColor(240, 249, 255); doc.roundedRect(ML, y, CW, blockH, 1, 1, 'F');
+          doc.setFillColor(59, 130, 246); doc.rect(ML, y, 2.5, blockH, 'F');
+          doc.setFontSize(8); doc.setFont('helvetica', 'normal'); doc.setTextColor(30, 60, 100);
+          doc.text(answerLines, ML + 6, y + 4); y += blockH + 6;
+        }
+        doc.setDrawColor(240, 240, 242); doc.setLineWidth(0.1);
+        doc.line(ML, y, W - MR, y); y += 5;
+      }
+    }
   }
 
   // ── Footer: page 1 ───────────────────────────────────────────
