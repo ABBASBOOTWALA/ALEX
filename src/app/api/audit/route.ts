@@ -1,8 +1,6 @@
 import { anthropic } from '@/lib/anthropic';
 import { ALEX_SYSTEM_PROMPT, ALEX_REWRITE_PROMPT } from '@/lib/alex-prompt';
-import { INTERVIEW_SYSTEM_PROMPT } from '@/lib/interview-prompt';
 import { AuditResultSchema, RewriteResponseSchema } from '@/lib/audit-schema';
-import { InterviewKitSchema } from '@/lib/interview-schema';
 
 export const maxDuration = 60;
 
@@ -13,7 +11,6 @@ export async function POST(request: Request) {
     return Response.json({ error: 'Profile text is required' }, { status: 400 });
   }
 
-  const hasJD = typeof jobDescription === 'string' && jobDescription.trim().length > 50;
   const encoder = new TextEncoder();
 
   const stream = new ReadableStream({
@@ -70,23 +67,6 @@ export async function POST(request: Request) {
           send({ type: 'rewrite', data: rewrite });
         }
 
-        // ── PHASE 3: Interview Kit (only if JD provided) ─────────
-        if (hasJD) {
-          send({ type: 'status', message: 'Generating your interview prep kit...' });
-
-          const phase3Text = await streamClaude(
-            INTERVIEW_SYSTEM_PROMPT,
-            buildPhase3Prompt(jobDescription, targetRole),
-            (chars) => send({ type: 'progress', chars, phase: 3 })
-          );
-
-          const phase3Json = extractJson(phase3Text);
-          if (!phase3Json) throw new Error(`Phase 3: no JSON found. Got: ${phase3Text.slice(0, 300)}`);
-
-          const kit = InterviewKitSchema.parse(JSON.parse(phase3Json));
-          send({ type: 'interview_kit', data: kit });
-        }
-
         send({ type: 'done' });
       } catch (error) {
         send({ type: 'error', message: String(error) });
@@ -113,7 +93,7 @@ async function streamClaude(
   let fullText = '';
   const claudeStream = anthropic.messages.stream({
     model: 'claude-sonnet-4-6',
-    max_tokens: 8000,
+    max_tokens: 4096,
     system: [
       {
         type: 'text',
@@ -160,19 +140,6 @@ ${sections.map((s) => `- ${s.id} (${s.label})`).join('\n')}
 PROFILE:
 ---
 ${profileText.slice(0, 8000)}
----
-
-Return ONLY the JSON as specified. No prose, no markdown.`;
-}
-
-function buildPhase3Prompt(jobDescription: string, targetRole?: string): string {
-  return `Generate a complete interview prep kit for this job.
-
-${targetRole ? `ROLE: ${targetRole}` : ''}
-
-JOB DESCRIPTION:
----
-${jobDescription.slice(0, 4000)}
 ---
 
 Return ONLY the JSON as specified. No prose, no markdown.`;

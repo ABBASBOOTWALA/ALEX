@@ -37,95 +37,77 @@ export function useAuditStream() {
       const hasJD = !!jobDescription && jobDescription.trim().length > 50;
 
       try {
-        const response = await fetch('/api/audit', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ profileText, targetRole, jobDescription }),
-        });
-
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        if (!response.body) throw new Error('No response body');
-
-        setStatus('scoring');
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = '';
-
-        const processLine = (line: string) => {
-          if (!line.trim()) return;
-          let msg: { type: string; [key: string]: unknown };
-          try { msg = JSON.parse(line); } catch { return; }
-
-          if (msg.type === 'error') throw new Error(String(msg.message));
-
-          switch (msg.type) {
-            case 'status':
-              setStatusMessage(String(msg.message));
-              break;
-
-            case 'progress': {
-              const phase = msg.phase as number;
-              const chars = msg.chars as number;
-              if (phase === 1) {
-                setProgress(Math.min(35, (chars / 2500) * 35));
-              } else if (phase === 2) {
-                setProgress(40 + Math.min(25, (chars / 3000) * 25));
-              } else if (phase === 3) {
-                setProgress(70 + Math.min(25, (chars / 5000) * 25));
+        // ── PHASE 1 + 2: Profile audit via /api/audit ────────────
+        await streamEndpoint(
+          '/api/audit',
+          { profileText, targetRole, jobDescription },
+          (msg) => {
+            switch (msg.type) {
+              case 'status':
+                setStatusMessage(String(msg.message));
+                break;
+              case 'progress': {
+                const phase = msg.phase as number;
+                const chars = msg.chars as number;
+                if (phase === 1) setProgress(Math.min(40, (chars / 2500) * 40));
+                else setProgress(45 + Math.min(30, (chars / 3000) * 30));
+                break;
               }
-              break;
+              case 'section':
+                setSections((prev) => [...prev, msg.data as AuditSection]);
+                setStatus('scoring');
+                break;
+              case 'summary':
+                setSummary(msg.data as Omit<AuditResult, 'sections'>);
+                setProgress(45);
+                setStatus('rewriting');
+                break;
+              case 'rewrite': {
+                const rw = msg.data as { id: string; before: string; after: string };
+                setSections((prev) =>
+                  prev.map((s) =>
+                    s.id === (rw.id as SectionId) ? { ...s, before: rw.before, after: rw.after } : s
+                  )
+                );
+                setProgress((prev) => Math.min(75, prev + 4));
+                break;
+              }
             }
-
-            case 'section':
-              setSections((prev) => [...prev, msg.data as AuditSection]);
-              setProgress((prev) => Math.min(38, prev + 0.5));
-              break;
-
-            case 'summary':
-              setSummary(msg.data as Omit<AuditResult, 'sections'>);
-              setProgress(40);
-              setStatus('rewriting');
-              break;
-
-            case 'rewrite': {
-              const rw = msg.data as { id: string; before: string; after: string };
-              setSections((prev) =>
-                prev.map((s) =>
-                  s.id === (rw.id as SectionId) ? { ...s, before: rw.before, after: rw.after } : s
-                )
-              );
-              setProgress((prev) => Math.min(68, prev + 4));
-              break;
-            }
-
-            case 'interview_kit':
-              setInterviewKit(msg.data as InterviewKit);
-              setProgress(hasJD ? 97 : 100);
-              if (hasJD) setStatus('interviewing');
-              break;
-
-            case 'done':
-              setProgress(100);
-              setStatus('done');
-              break;
           }
-        };
+        );
 
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) {
-            if (buffer.trim()) processLine(buffer);
-            break;
-          }
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split('\n');
-          buffer = lines.pop() ?? '';
-          for (const line of lines) processLine(line);
+        if (!hasJD) {
+          setProgress(100);
+          setStatus('done');
+          return;
         }
 
-        // Fallback if stream closes without done message
-        setStatus((s) => (['scoring', 'rewriting', 'interviewing'].includes(s) ? 'done' : s));
+        // ── PHASE 3: Interview kit via /api/interview ─────────────
+        setStatus('interviewing');
+        setProgress(78);
+        setStatusMessage('Building your interview prep kit...');
+
+        await streamEndpoint(
+          '/api/interview',
+          { jobDescription, targetRole },
+          (msg) => {
+            switch (msg.type) {
+              case 'status':
+                setStatusMessage(String(msg.message));
+                break;
+              case 'progress':
+                setProgress(78 + Math.min(18, ((msg.chars as number) / 5000) * 18));
+                break;
+              case 'interview_kit':
+                setInterviewKit(msg.data as InterviewKit);
+                setProgress(98);
+                break;
+            }
+          }
+        );
+
         setProgress(100);
+        setStatus('done');
       } catch (err) {
         setError(String(err));
         setStatus('error');
@@ -135,4 +117,44 @@ export function useAuditStream() {
   );
 
   return { status, sections, summary, interviewKit, progress, statusMessage, error, startAudit, reset };
+}
+
+// ── Shared NDJSON stream reader ───────────────────────────────
+async function streamEndpoint(
+  url: string,
+  body: object,
+  onMessage: (msg: { type: string; [key: string]: unknown }) => void
+): Promise<void> {
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) throw new Error(`${url} returned HTTP ${response.status}`);
+  if (!response.body) throw new Error(`${url} returned no body`);
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  const processLine = (line: string) => {
+    if (!line.trim()) return;
+    let msg: { type: string; [key: string]: unknown };
+    try { msg = JSON.parse(line); } catch { return; }
+    if (msg.type === 'error') throw new Error(String(msg.message));
+    if (msg.type !== 'done') onMessage(msg);
+  };
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) {
+      if (buffer.trim()) processLine(buffer);
+      break;
+    }
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() ?? '';
+    for (const line of lines) processLine(line);
+  }
 }
