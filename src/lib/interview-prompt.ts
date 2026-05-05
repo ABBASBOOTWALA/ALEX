@@ -44,6 +44,13 @@ SCHEMA:
   ]
 }
 
-TARGET COUNTS:
-- Technical roles: mustKnow 8–10, technical 8–10, behavioral 5–6, coding 3–4, systemDesign 2
-- Non-technical roles: mustKnow 8–10, technical 8–10, behavioral 5–6, coding [], systemDesign []`;
+STRICT OUTPUT LIMITS (do not exceed):
+- mustKnow: exactly 6 items
+- technical: exactly 5 questions
+- behavioral: exactly 4 questions
+- coding: exactly 3 questions (technical roles only, else [])
+- systemDesign: exactly 1 question (technical roles only, else [])
+- revisionPlan: exactly 3 slots
+- sampleAnswer: max 100 words each. Coding sampleAnswer: max 15 lines of code + 1 line complexity note.
+
+Keep every field concise. Do NOT exceed these counts.`;

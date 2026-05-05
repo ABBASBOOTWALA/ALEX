@@ -11,6 +11,7 @@ export function useAuditStream() {
   const [sections, setSections] = useState<AuditSection[]>([]);
   const [summary, setSummary] = useState<Omit<AuditResult, 'sections'> | null>(null);
   const [interviewKit, setInterviewKit] = useState<InterviewKit | null>(null);
+  const [interviewError, setInterviewError] = useState<string | null>(null);
   const [progress, setProgress] = useState(0);
   const [statusMessage, setStatusMessage] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -20,9 +21,44 @@ export function useAuditStream() {
     setSections([]);
     setSummary(null);
     setInterviewKit(null);
+    setInterviewError(null);
     setProgress(0);
     setStatusMessage('');
     setError(null);
+  }, []);
+
+  const fetchInterviewKit = useCallback(async (jobDescription: string, targetRole?: string) => {
+    setInterviewError(null);
+    setStatus('interviewing');
+    setProgress(78);
+    setStatusMessage('Building your interview prep kit...');
+
+    try {
+      await streamEndpoint(
+        '/api/interview',
+        { jobDescription, targetRole },
+        (msg) => {
+          switch (msg.type) {
+            case 'status':
+              setStatusMessage(String(msg.message));
+              break;
+            case 'progress':
+              setProgress(78 + Math.min(18, ((msg.chars as number) / 4000) * 18));
+              break;
+            case 'interview_kit':
+              setInterviewKit(msg.data as InterviewKit);
+              setProgress(98);
+              break;
+          }
+        }
+      );
+      setProgress(100);
+      setStatus('done');
+    } catch (err) {
+      console.error('[interview]', err);
+      setInterviewError(String(err));
+      setStatus('done'); // audit is still valid — don't block it
+    }
   }, []);
 
   const startAudit = useCallback(
@@ -31,13 +67,14 @@ export function useAuditStream() {
       setSections([]);
       setSummary(null);
       setInterviewKit(null);
+      setInterviewError(null);
       setProgress(0);
       setError(null);
 
       const hasJD = !!jobDescription && jobDescription.trim().length > 50;
 
       try {
-        // ── PHASE 1 + 2: Profile audit via /api/audit ────────────
+        // ── PHASE 1 + 2: Profile audit ───────────────────────────
         await streamEndpoint(
           '/api/audit',
           { profileText, targetRole, jobDescription },
@@ -82,44 +119,23 @@ export function useAuditStream() {
           return;
         }
 
-        // ── PHASE 3: Interview kit via /api/interview ─────────────
-        setStatus('interviewing');
-        setProgress(78);
-        setStatusMessage('Building your interview prep kit...');
-
-        await streamEndpoint(
-          '/api/interview',
-          { jobDescription, targetRole },
-          (msg) => {
-            switch (msg.type) {
-              case 'status':
-                setStatusMessage(String(msg.message));
-                break;
-              case 'progress':
-                setProgress(78 + Math.min(18, ((msg.chars as number) / 5000) * 18));
-                break;
-              case 'interview_kit':
-                setInterviewKit(msg.data as InterviewKit);
-                setProgress(98);
-                break;
-            }
-          }
-        );
-
-        setProgress(100);
-        setStatus('done');
+        // ── PHASE 3: Interview kit (separate call) ────────────────
+        await fetchInterviewKit(jobDescription!, targetRole);
       } catch (err) {
+        console.error('[audit]', err);
         setError(String(err));
         setStatus('error');
       }
     },
-    []
+    [fetchInterviewKit]
   );
 
-  return { status, sections, summary, interviewKit, progress, statusMessage, error, startAudit, reset };
+  return {
+    status, sections, summary, interviewKit, interviewError,
+    progress, statusMessage, error, startAudit, reset, fetchInterviewKit,
+  };
 }
 
-// ── Shared NDJSON stream reader ───────────────────────────────
 async function streamEndpoint(
   url: string,
   body: object,
@@ -131,8 +147,11 @@ async function streamEndpoint(
     body: JSON.stringify(body),
   });
 
-  if (!response.ok) throw new Error(`${url} returned HTTP ${response.status}`);
-  if (!response.body) throw new Error(`${url} returned no body`);
+  if (!response.ok) {
+    const text = await response.text().catch(() => '');
+    throw new Error(`${url} → HTTP ${response.status}: ${text.slice(0, 200)}`);
+  }
+  if (!response.body) throw new Error(`${url} → no response body`);
 
   const reader = response.body.getReader();
   const decoder = new TextDecoder();

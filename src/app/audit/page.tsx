@@ -15,7 +15,7 @@ import type { AuditResult } from '@/types/audit';
 
 export default function AuditPage() {
   const router = useRouter();
-  const { status, sections, summary, interviewKit, progress, statusMessage, error, startAudit, reset } =
+  const { status, sections, summary, interviewKit, interviewError, progress, statusMessage, error, startAudit, reset, fetchInterviewKit } =
     useAuditStream();
   const [targetRole, setTargetRole] = useState('');
   const [hasJD, setHasJD] = useState(false);
@@ -157,6 +157,22 @@ export default function AuditPage() {
             <ActionPlan items={summary.action_plan} />
           )}
         </AnimatePresence>
+
+        {/* Interview error + retry */}
+        {interviewError && !interviewKit && (
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}
+            className="mt-8 border border-red-900/40 bg-red-950/20 rounded-xl p-5">
+            <p className="text-red-400 font-semibold text-sm mb-1">Interview kit failed to generate</p>
+            <p className="text-zinc-500 text-xs mb-4 font-mono break-all">{interviewError}</p>
+            <Button size="sm" onClick={() => {
+              const jd = sessionStorage.getItem('jobDescription') ?? '';
+              const role = sessionStorage.getItem('targetRole') ?? '';
+              if (jd) fetchInterviewKit(jd, role || undefined);
+            }} className="bg-blue-600 hover:bg-blue-500 text-white">
+              <RefreshCw className="w-3.5 h-3.5 mr-1.5" /> Retry Interview Kit
+            </Button>
+          </motion.div>
+        )}
 
         {/* No JD teaser */}
         {isDone && !hasJD && !interviewKit && (
